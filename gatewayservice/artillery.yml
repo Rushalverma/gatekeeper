@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Artillery Load Test — API Gateway SaaS
+#
+# Usage:
+#   npx artillery run artillery.yml
+#
+# Prerequisites:
+#   1. Server running:  npm run dev
+#   2. A valid API key generated:  POST /api/keys/generate
+#   3. Replace YOUR_API_KEY_HERE below with your actual gw_live_xxx key
+# ─────────────────────────────────────────────────────────────────────────────
+
+config:
+  target: "http://localhost:3000"
+  http:
+    timeout: 10
+    pool: 50          # reuse connections — reduces ECONNREFUSED under spike load
+    maxSockets: 100   # cap concurrent sockets per VU
+  defaults:
+    headers:
+      x-api-key: "gw_live_3cb517255ca9eba853fb7d981d9ba30e2a24557e34d0bd3531197fecb2119755"
+      Content-Type: "application/json"
+
+  # ── Load Phases ──────────────────────────────────────────────────────────────
+  phases:
+    # Phase 1 — Warm-up: ramp from 0 → 50 req/s over 15 seconds
+    - name: "Warm-up"
+      duration: 15
+      arrivalRate: 5
+      rampTo: 50
+
+    # Phase 2 — Sustained load: 200 req/s for 30 seconds
+    #           A FREE-tier key (100 req/min) will start receiving 429s here.
+    - name: "Sustained Load"
+      duration: 30
+      arrivalRate: 200
+
+    # Phase 3 — Spike: blast to 500 req/s for 15 seconds
+    - name: "Spike"
+      duration: 15
+      arrivalRate: 500
+
+  # ── Metrics to track ──────────────────────────────────────────────────────
+  ensure:
+    # Fail the benchmark if p95 latency exceeds 100ms
+    p95: 100
+    # Fail if more than 5% of requests error out at the network level
+    maxErrorRate: 5
+
+  plugins:
+    metrics-by-endpoint:
+      useOnlyRequestNames: true
+
+scenarios:
+  # ── Scenario 1: GET /v1/posts (basic proxy throughput) ────────────────────
+  - name: "GET /v1/posts"
+    weight: 60
+    flow:
+      - get:
+          url: "/v1/posts"
+          name: "Proxy GET /posts"
+          expect:
+            # We expect either 200 (allowed) or 429 (rate limited) — both are
+            # correct behaviour from the gateway's perspective.
+            - statusCode:
+                - 200
+                - 429
+
+  # ── Scenario 2: GET /v1/posts/:id ─────────────────────────────────────────
+  - name: "GET /v1/posts by ID"
+    weight: 30
+    flow:
+      - get:
+          url: "/v1/posts/{{ $randomNumber(1, 100) }}"
+          name: "Proxy GET /posts/:id"
+          expect:
+            - statusCode:
+                - 200
+                - 429
+
+  # ── Scenario 3: Health check (no API key, no rate limiting) ───────────────
+  - name: "Health Check"
+    weight: 10
+    flow:
+      - get:
+          url: "/health"
+          name: "Health Check"
+          headers:
+            x-api-key: ""   # override — health endpoint doesn't need a key
+          expect:
+            - statusCode: 200

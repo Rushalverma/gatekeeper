@@ -1,0 +1,187 @@
+# =============================================================================
+# Docker Compose — API Gateway SaaS
+# Production-grade distributed architecture
+#
+# Architecture:
+#   ┌─────────────────────────────────────────────────────────┐
+#   │  Host :80                                               │
+#   │    ↓                                                    │
+#   │  [nginx]  ←── load balancer (least-conn round-robin)   │
+#   │    ↓  ↓  ↓                                             │
+#   │  [gateway_1] [gateway_2] [gateway_3]  (Node.js)        │
+#   │       ↓              ↓                                  │
+#   │    [mysql]         [redis]   ← shared state             │
+#   └─────────────────────────────────────────────────────────┘
+#
+# ── Single instance (development) ────────────────────────────────────────────
+#   docker compose up -d
+#
+# ── Horizontal scaling (production) ─────────────────────────────────────────
+#   docker compose up -d --scale gateway=3
+#
+#   Nginx automatically discovers all scaled gateway containers via Docker's
+#   internal DNS ("gateway" resolves to N IPs) and least-conn load balances
+#   across them. No nginx.conf changes required.
+#
+# ── Scale up/down live (zero downtime) ───────────────────────────────────────
+#   docker compose up -d --scale gateway=5   # add 2 more instances
+#   docker compose up -d --scale gateway=2   # remove 3 instances
+#
+# ── View which instance handled each request ─────────────────────────────────
+#   docker compose logs -f nginx             # shows upstream_addr in access log
+# =============================================================================
+
+services:
+
+  # ── Redis ── Shared rate-limit state ──────────────────────────────────────
+  #
+  # ALL gateway instances connect to this single Redis.
+  # This is the "shield" — the Token Bucket counters live here and are
+  # atomically incremented via Lua scripts, so rate limits are accurate
+  # even when 10 Node.js processes handle the same API key concurrently.
+  redis:
+    image: redis:7-alpine
+    container_name: gw_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory      256mb
+      --maxmemory-policy allkeys-lru
+      --save           ""
+      --appendonly     no
+    ports:
+      # Expose to host for debugging with redis-cli.
+      # Remove this in a locked-down production environment.
+      - "6379:6379"
+    networks:
+      - gateway_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ── MySQL ── Persistent storage ────────────────────────────────────────────
+  #
+  # Stores users, API keys, and request_logs.
+  # A single MySQL instance is shared by all gateway replicas —
+  # each replica uses a connection pool (connectionLimit: 20 per instance).
+  mysql:
+    image: mysql:8.0
+    container_name: gw_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASS}
+      MYSQL_DATABASE:      ${DB_NAME}
+    volumes:
+      # Persist data across container restarts
+      - mysql_data:/var/lib/mysql
+      # Auto-run schema on first boot
+      - ./config/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      # Expose to host for GUI tools (TablePlus, DBeaver, etc.)
+      # Remove in production.
+      - "3306:3306"
+    networks:
+      - gateway_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASS}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Gateway ── Node.js API Gateway (horizontally scalable) ─────────────────
+  #
+  # CRITICAL: No "ports:" mapping here. The Node.js port (3000) is intentionally
+  # only exposed on the internal Docker network, not on the host machine.
+  # ALL external traffic must flow through Nginx — this prevents bypassing the
+  # load balancer and rate limiter by hitting a gateway directly.
+  #
+  # Scale with:  docker compose up -d --scale gateway=N
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    image: api-gateway-saas:latest
+    restart: unless-stopped
+    environment:
+      PORT:             3000
+      NODE_ENV:         production
+
+      # Database — points to the mysql service by its Compose service name
+      DB_HOST:          mysql
+      DB_PORT:          3306
+      DB_USER:          root
+      DB_PASS:          ${DB_PASS}
+      DB_NAME:          ${DB_NAME}
+
+      # Redis — points to the redis service (shared across ALL gateway instances)
+      REDIS_HOST:       redis
+      REDIS_PORT:       6379
+      REDIS_PASSWORD:   ${REDIS_PASSWORD:-}
+
+      # JWT
+      JWT_SECRET:       ${JWT_SECRET}
+      JWT_EXPIRES_IN:   ${JWT_EXPIRES_IN:-7d}
+
+      # Proxy upstream
+      PROXY_TARGET:     ${PROXY_TARGET:-https://jsonplaceholder.typicode.com}
+
+      # Frontend CORS origin
+      FRONTEND_URL:     ${FRONTEND_URL:-http://localhost:5173}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - gateway_net
+    # No "ports:" — intentionally internal-only.
+    # Nginx is the ONLY entry point for external traffic.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ── Nginx ── Load Balancer / Reverse Proxy ─────────────────────────────────
+  #
+  # The single public-facing entry point. Distributes traffic across all
+  # gateway instances using the least-conn algorithm.
+  # Mount nginx.conf read-only — container cannot modify it.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: gw_nginx
+    restart: unless-stopped
+    ports:
+      # The ONLY externally exposed port in the entire stack.
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - gateway
+    networks:
+      - gateway_net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  mysql_data:
+    driver: local
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  gateway_net:
+    driver: bridge
+    # Enable Docker's internal DNS (resolves service names to container IPs)
+    # Required for Nginx to discover scaled gateway replicas dynamically

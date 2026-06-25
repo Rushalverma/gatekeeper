@@ -1,0 +1,32 @@
+{
+  "name": "api-gateway-saas",
+  "version": "1.0.0",
+  "description": "Production-grade API Rate-Limiting & Gateway Service with Redis Token Bucket, MySQL analytics, and JWT auth.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "api-gateway",
+    "rate-limiting",
+    "redis",
+    "saas"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.10.1",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

@@ -1,0 +1,34 @@
+# Exclude everything that doesn't need to be in the Docker build context.
+# This keeps the image lean and prevents secrets/dev files from leaking in.
+
+node_modules/
+npm-debug.log*
+
+# Dev & test files
+.env
+.env.*
+artillery.yml
+artillery-report-*.json
+
+# Logs
+logs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Docker files (don't copy them into the image)
+Dockerfile
+docker-compose.yml
+nginx.conf
+
+# Coverage / build
+dist/
+coverage/
