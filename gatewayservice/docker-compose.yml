@@ -44,15 +44,15 @@ services:
     container_name: gw_redis
     restart: unless-stopped
     command: >
-      redis-server
-      --maxmemory      256mb
-      --maxmemory-policy allkeys-lru
-      --save           ""
-      --appendonly     no
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+      exec redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no --requirepass "$$REDIS_PASSWORD";
+      else
+      exec redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no;
+      fi'
     ports:
       # Expose to host for debugging with redis-cli.
-      # Remove this in a locked-down production environment.
-      - "6379:6379"
+      # Bind to loopback so Redis is not public on the network.
+      - "127.0.0.1:6379:6379"
     networks:
       - gateway_net
     healthcheck:
@@ -81,8 +81,8 @@ services:
       - ./config/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     ports:
       # Expose to host for GUI tools (TablePlus, DBeaver, etc.)
-      # Remove in production.
-      - "3306:3306"
+      # Bind to loopback so MySQL is not public on the network.
+      - "127.0.0.1:3306:3306"
     networks:
       - gateway_net
     healthcheck:
@@ -168,7 +168,7 @@ services:
     networks:
       - gateway_net
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 3

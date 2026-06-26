@@ -95,6 +95,13 @@ async function revokeKey(req, res) {
       return res.status(404).json({ error: 'Key not found or already revoked.' });
     }
 
+    try {
+      const redis = require('../config/redis');
+      await redis.del(`gw:meta:${keyId}`, `gw:rl:${keyId}`);
+    } catch (cacheErr) {
+      console.warn('[keyController.revokeKey] Cache invalidation failed:', cacheErr.message);
+    }
+
     return res.status(200).json({ message: `Key ${keyId.substring(0, 20)}... has been revoked.` });
   } catch (err) {
     console.error('[keyController.revokeKey]', err);

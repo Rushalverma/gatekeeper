@@ -21,10 +21,26 @@ async function proxyRequest(req, res) {
   const targetUrl  = `${PROXY_TARGET}/${targetPath}`;
 
   // Build forwarded headers — remove internal headers that should not leak
-  const forwardHeaders = { ...req.headers };
-  delete forwardHeaders['x-api-key'];     // never forward our gateway key
-  delete forwardHeaders['host'];          // prevents host header mismatch
-  delete forwardHeaders['content-length']; // axios sets this correctly
+  const forwardHeaders = {};
+  const allowList = new Set([
+    'accept',
+    'accept-language',
+    'content-type',
+    'if-modified-since',
+    'if-none-match',
+    'user-agent',
+  ]);
+
+  for (const [name, value] of Object.entries(req.headers)) {
+    const normalized = name.toLowerCase();
+    if (allowList.has(normalized)) {
+      forwardHeaders[normalized] = value;
+    }
+  }
+
+  // Preserve forwarding context without leaking gateway auth secrets.
+  forwardHeaders['x-forwarded-for'] = req.headers['x-forwarded-for'] || req.ip;
+  forwardHeaders['x-forwarded-proto'] = req.headers['x-forwarded-proto'] || req.protocol;
 
   const startTime = process.hrtime.bigint(); // nanosecond precision timer
 

@@ -15,9 +15,12 @@ const keyRoutes       = require('./routes/keyRoutes');
 const gatewayRoutes   = require('./routes/gatewayRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const userRoutes      = require('./routes/userRoutes');
+const authRateLimiter = require('./middleware/authRateLimiter');
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 // ─── CORS — allow the Vite dev server and any deployed frontend ──────────────
 app.use(cors({
@@ -60,6 +63,7 @@ app.get('/health', (req, res) => {
 });
 
 // ─── Route Mounting ───────────────────────────────────────────────────────────
+app.use('/auth', authRateLimiter);
 app.use('/auth',            authRoutes);        // POST /auth/register, /auth/login
 app.use('/api/keys',        keyRoutes);         // POST /api/keys/generate, GET /api/keys
 app.use('/api/analytics',   analyticsRoutes);   // GET  /api/analytics/usage
